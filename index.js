@@ -119,6 +119,119 @@ client.on('interactionCreate', async interaction => {
 
         await interaction.reply({ embeds: [embed], ephemeral: true });
     }
+
+    // Buy Quantity Modal Submit
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('buy_quantity_')) {
+        const categoryId = interaction.customId.replace('buy_quantity_', '');
+        const quantityStr = interaction.fields.getTextInputValue('quantity');
+        const quantity = parseInt(quantityStr);
+
+        if (isNaN(quantity) || quantity < 1) {
+            return interaction.reply({ content: '❌ الكمية يجب أن تكون رقم صحيح أكبر من 0', ephemeral: true });
+        }
+
+        const db = loadDatabase();
+        const category = db.categories[categoryId];
+        const available = db.products[categoryId]?.length || 0;
+
+        if (quantity > available) {
+            return interaction.reply({ content: `❌ الكمية المطلوبة (${quantity}) أكبر من المتوفر (${available})`, ephemeral: true });
+        }
+
+        const lockKey = `${interaction.user.id}_${categoryId}`;
+        global.pendingPurchases.set(lockKey, { quantity, timestamp: Date.now() });
+
+        const totalPrice = category.price * quantity;
+        const priceWithTax = Math.floor(totalPrice * (20 / 19) + 1);
+
+        const payEmbed = new EmbedBuilder()
+            .setTitle('💳 إتمام الشراء')
+            .setDescription(
+                `**${category.name}**\n\n` +
+                `📦 **الكمية:** \`${quantity}\`\n` +
+                `💰 **السعر الإجمالي:** \`${totalPrice}\` ${config.creditEmoji}\n\n` +
+                `📋 **قم بتحويل:**\n\`\`\`\n#credit <@${config.recipient}> ${priceWithTax}\n\`\`\`\n` +
+                `⏱️ الوقت: دقيقتين`
+            )
+            .setColor('#FEE75C')
+            .setFooter({ text: '⚠️ تأكد من أن الخاص مفتوح' });
+
+        await interaction.reply({ embeds: [payEmbed] });
+
+        console.log(`\n[BUY] Buyer: ${interaction.user.username} | Product: ${category.name} x${quantity} | Total: ${totalPrice}`);
+
+        // انتظار الدفع
+        const filter = (m) => {
+            if (m.author.id !== config.probotId) return false;
+            const buyerUsername = interaction.user.username.toLowerCase().replace(/[.,\s]/g, '');
+            const messageContent = m.content.toLowerCase().replace(/[.,\s]/g, '');
+            const mentionsBuyer = messageContent.includes(buyerUsername);
+            const mentionsRecipient = m.mentions.users.has(config.recipient) || m.content.includes(config.recipient);
+            if (!mentionsBuyer || !mentionsRecipient) return false;
+            const match = m.content.match(/transferred\s+[`']?\$?(\d+)/i) || m.content.match(/[`']\$(\d+)/);
+            return match && parseInt(match[1]) === totalPrice;
+        };
+
+        const msgCollector = interaction.channel.createMessageCollector({ filter, time: 120000, max: 1 });
+
+        msgCollector.on('collect', async () => {
+            const finalDb = loadDatabase();
+            const products = finalDb.products[categoryId];
+
+            if (!products || products.length < quantity) {
+                global.pendingPurchases.delete(lockKey);
+                return interaction.followUp({ content: '❌ نفذ المخزون!' });
+            }
+
+            // سحب المنتجات المطلوبة
+            const purchasedProducts = [];
+            for (let i = 0; i < quantity; i++) {
+                const idx = Math.floor(Math.random() * products.length);
+                purchasedProducts.push(products.splice(idx, 1)[0]);
+            }
+            saveDatabase(finalDb);
+
+            const productsText = purchasedProducts.join('\n');
+
+            const successEmbed = new EmbedBuilder()
+                .setAuthor({ name: config.shopName, iconURL: interaction.client.user.displayAvatarURL() })
+                .setTitle('✅ تمت عملية الشراء!')
+                .setThumbnail(interaction.client.user.displayAvatarURL({ size: 256 }))
+                .setDescription(
+                    `**📦 المنتج :** \`${category.name}\` x${quantity}\n` +
+                    `**💰 السعر :** \`${totalPrice}\` ${config.creditEmoji}\n\n` +
+                    `**🔑 البيانات :**\n\`\`\`\n${productsText}\n\`\`\`\n` +
+                    `الرجاء تقييمنا في <#${config.feedbackChannel}>`
+                )
+                .setColor('#57F287')
+                .setFooter({ text: config.shopName })
+                .setTimestamp();
+
+            const channelEmbed = new EmbedBuilder()
+                .setTitle('تم إرسال المنتج في الخاص!')
+                .setColor('#57F287');
+
+            try {
+                await interaction.user.send({ embeds: [successEmbed] });
+                await interaction.followUp({ embeds: [channelEmbed] });
+                console.log(`[BUY] ✅ Success - ${interaction.user.username} - ${quantity} products`);
+            } catch {
+                // إرجاع المنتجات
+                purchasedProducts.forEach(p => products.push(p));
+                saveDatabase(finalDb);
+                await interaction.followUp({ content: '❌ افتح خاصك!' });
+            }
+
+            global.pendingPurchases.delete(lockKey);
+        });
+
+        msgCollector.on('end', collected => {
+            global.pendingPurchases.delete(lockKey);
+            if (collected.size === 0) {
+                interaction.followUp({ content: '⏱️ انتهى الوقت!', ephemeral: true }).catch(() => { });
+            }
+        });
+    }
 });
 
 // ============ PREFIX COMMANDS ($) ============
@@ -206,99 +319,30 @@ client.on('messageCreate', async message => {
                 return selectInteraction.reply({ content: '⏳ لديك عملية شراء جارية! انتظر حتى تنتهي.' });
             }
 
-            // قفل العملية
-            global.pendingPurchases.set(lockKey, Date.now());
-
             const currentDb = loadDatabase();
             const category = currentDb.categories[categoryId];
+            const available = currentDb.products[categoryId]?.length || 0;
 
-            if (!currentDb.products[categoryId] || currentDb.products[categoryId].length === 0) {
-                global.pendingPurchases.delete(lockKey);
+            if (available === 0) {
                 return selectInteraction.reply({ content: '❌ نفذ المخزون!' });
             }
 
-            const price = category.price;
-            const priceWithTax = Math.floor(price * (20 / 19) + 1);
+            // Modal لإدخال الكمية
+            const modal = new ModalBuilder()
+                .setCustomId(`buy_quantity_${categoryId}`)
+                .setTitle(`شراء ${category.name}`);
 
-            const payEmbed = new EmbedBuilder()
-                .setTitle('💳 إتمام الشراء')
-                .setDescription(
-                    `**${category.name}**\n\n` +
-                    `💰 **السعر:** \`${price}\` ${config.creditEmoji}\n\n` +
-                    `📋 **قم بتحويل:**\n\`\`\`\n#credit <@${config.recipient}> ${priceWithTax}\n\`\`\`\n` +
-                    `⏱️ الوقت: دقيقتين`
-                )
-                .setColor('#FEE75C')
-                .setFooter({ text: '⚠️ تأكد من أن الخاص مفتوح' });
+            const quantityInput = new TextInputBuilder()
+                .setCustomId('quantity')
+                .setLabel(`الكمية (متوفر: ${available})`)
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('1')
+                .setRequired(true)
+                .setMinLength(1)
+                .setMaxLength(3);
 
-            await selectInteraction.reply({ embeds: [payEmbed] });
-
-            console.log(`\n[BUY] Buyer: ${message.author.username} | Product: ${category.name} | Price: ${price}`);
-
-            const filter = (m) => {
-                if (m.author.id !== config.probotId) return false;
-                const buyerUsername = message.author.username.toLowerCase().replace(/[.,\s]/g, '');
-                const messageContent = m.content.toLowerCase().replace(/[.,\s]/g, '');
-                const mentionsBuyer = messageContent.includes(buyerUsername);
-                const mentionsRecipient = m.mentions.users.has(config.recipient) || m.content.includes(config.recipient);
-                if (!mentionsBuyer || !mentionsRecipient) return false;
-                const match = m.content.match(/transferred\s+[`']?\$?(\d+)/i) || m.content.match(/[`']\$(\d+)/);
-                return match && parseInt(match[1]) === price;
-            };
-
-            const msgCollector = message.channel.createMessageCollector({ filter, time: 120000, max: 1 });
-
-            msgCollector.on('collect', async () => {
-                const finalDb = loadDatabase();
-                const products = finalDb.products[categoryId];
-
-                if (!products || products.length === 0) {
-                    return message.channel.send('❌ نفذ المخزون!');
-                }
-
-                const randomIndex = Math.floor(Math.random() * products.length);
-                const product = products[randomIndex];
-                products.splice(randomIndex, 1);
-                saveDatabase(finalDb);
-
-                const successEmbed = new EmbedBuilder()
-                    .setAuthor({ name: config.shopName, iconURL: message.client.user.displayAvatarURL() })
-                    .setTitle('✅ تمت عملية الشراء!')
-                    .setThumbnail(message.client.user.displayAvatarURL({ size: 256 }))
-                    .setDescription(
-                        `**📦 المنتج :** \`${category.name}\`\n` +
-                        `**💰 السعر :** \`${price}\` ${config.creditEmoji}\n\n` +
-                        `**🔑 البيانات :**\n\`\`\`\n${product}\n\`\`\`\n` +
-                        `الرجاء تقييمنا في <#${config.feedbackChannel}>`
-                    )
-                    .setColor('#57F287')
-                    .setFooter({ text: config.shopName, iconURL: message.client.user.displayAvatarURL() })
-                    .setTimestamp();
-
-                const channelEmbed = new EmbedBuilder()
-                    .setTitle('تم إرسال المنتج في الخاص!')
-                    .setColor('#57F287');
-
-                try {
-                    await message.author.send({ embeds: [successEmbed] });
-                    await message.channel.send({ embeds: [channelEmbed] });
-                    console.log(`[BUY] ✅ Success - ${message.author.username}`);
-                } catch {
-                    products.push(product);
-                    saveDatabase(finalDb);
-                    message.channel.send('❌ افتح خاصك!');
-                }
-
-                // إزالة القفل
-                global.pendingPurchases.delete(lockKey);
-            });
-
-            msgCollector.on('end', collected => {
-                // إزالة القفل
-                global.pendingPurchases.delete(lockKey);
-
-                if (collected.size === 0) message.channel.send('⏱️ انتهى الوقت!');
-            });
+            modal.addComponents(new ActionRowBuilder().addComponents(quantityInput));
+            await selectInteraction.showModal(modal);
         });
     }
 
