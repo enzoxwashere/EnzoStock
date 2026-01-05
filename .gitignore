@@ -1,0 +1,15 @@
+# Ignore env file with secrets
+.env
+
+# Database (optional - remove if you want to share empty db)
+database.json
+
+# Node modules
+node_modules/
+
+# SQLite
+*.sqlite
+
+# OS files
+.DS_Store
+Thumbs.db

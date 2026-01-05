@@ -1,0 +1,17 @@
+{
+    "recipient": "972455571888414790",
+    "probotId": "282859044593598464",
+    "shopName": "Enzo Stock",
+    "creditEmoji": "<a:ProBot:1455561364452937911>",
+    "feedbackChannel": "1453893121560547399",
+    "colors": {
+        "primary": "#5865F2",
+        "success": "#57F287",
+        "warning": "#FEE75C",
+        "error": "#ED4245"
+    },
+    "timeouts": {
+        "payment": 120000,
+        "selection": 60000
+    }
+}
