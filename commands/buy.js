@@ -71,10 +71,21 @@ module.exports = {
 
         selectCollector.on('collect', async selectInteraction => {
             const categoryId = selectInteraction.values[0];
+            const lockKey = `${interaction.user.id}_${categoryId}`;
+
+            // تحقق من القفل
+            if (global.pendingPurchases.has(lockKey)) {
+                return selectInteraction.reply({ content: '⏳ لديك عملية شراء جارية! انتظر حتى تنتهي.', ephemeral: true });
+            }
+
+            // قفل العملية
+            global.pendingPurchases.set(lockKey, Date.now());
+
             const currentDb = loadDatabase();
             const category = currentDb.categories[categoryId];
 
             if (!currentDb.products[categoryId] || currentDb.products[categoryId].length === 0) {
+                global.pendingPurchases.delete(lockKey);
                 return selectInteraction.reply({ content: '❌ نفذ المخزون!', ephemeral: true });
             }
 
@@ -240,9 +251,15 @@ module.exports = {
                     });
                     console.log(`[BUY] ❌ DM failed - product returned`);
                 }
+
+                // إزالة القفل
+                global.pendingPurchases.delete(lockKey);
             });
 
             msgCollector.on('end', collected => {
+                // إزالة القفل عند انتهاء الوقت
+                global.pendingPurchases.delete(lockKey);
+
                 if (collected.size === 0) {
                     selectInteraction.followUp({
                         content: '⏱️ انتهى الوقت!',

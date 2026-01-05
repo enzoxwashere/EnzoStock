@@ -32,6 +32,10 @@ function saveDatabase(db) {
 global.db = loadDatabase();
 global.shopOpen = true;
 
+// نظام قفل لمنع البيع المتزامن
+global.purchaseLocks = new Map(); // categoryId -> Set of userIds
+global.pendingPurchases = new Map(); // `userId_categoryId` -> timestamp
+
 // Load Slash Commands
 client.commands = new Collection();
 const commandsPath = path.join(__dirname, 'commands');
