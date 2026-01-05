@@ -158,6 +158,12 @@ client.on('messageCreate', async message => {
 
     // ======= $buy =======
     else if (cmd === 'buy') {
+        // تحقق إذا عنده عملية شراء جارية
+        const hasActivePurchase = [...global.pendingPurchases.keys()].some(key => key.startsWith(message.author.id + '_'));
+        if (hasActivePurchase) {
+            return message.reply('⏳ لديك عملية شراء جارية! انتظر حتى تنتهي.');
+        }
+
         const options = [];
         for (const [id, category] of Object.entries(db.categories)) {
             const count = db.products[id]?.length || 0;
@@ -193,10 +199,21 @@ client.on('messageCreate', async message => {
 
         collector.on('collect', async selectInteraction => {
             const categoryId = selectInteraction.values[0];
+            const lockKey = `${message.author.id}_${categoryId}`;
+
+            // تحقق من القفل - منع السبام
+            if (global.pendingPurchases.has(lockKey)) {
+                return selectInteraction.reply({ content: '⏳ لديك عملية شراء جارية! انتظر حتى تنتهي.' });
+            }
+
+            // قفل العملية
+            global.pendingPurchases.set(lockKey, Date.now());
+
             const currentDb = loadDatabase();
             const category = currentDb.categories[categoryId];
 
             if (!currentDb.products[categoryId] || currentDb.products[categoryId].length === 0) {
+                global.pendingPurchases.delete(lockKey);
                 return selectInteraction.reply({ content: '❌ نفذ المخزون!' });
             }
 
@@ -271,9 +288,15 @@ client.on('messageCreate', async message => {
                     saveDatabase(finalDb);
                     message.channel.send('❌ افتح خاصك!');
                 }
+
+                // إزالة القفل
+                global.pendingPurchases.delete(lockKey);
             });
 
             msgCollector.on('end', collected => {
+                // إزالة القفل
+                global.pendingPurchases.delete(lockKey);
+
                 if (collected.size === 0) message.channel.send('⏱️ انتهى الوقت!');
             });
         });

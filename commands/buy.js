@@ -26,6 +26,12 @@ module.exports = {
             return;
         }
 
+        // تحقق إذا عنده عملية شراء جارية
+        const hasActivePurchase = [...global.pendingPurchases.keys()].some(key => key.startsWith(interaction.user.id + '_'));
+        if (hasActivePurchase) {
+            return interaction.editReply({ content: '⏳ لديك عملية شراء جارية! انتظر حتى تنتهي.' });
+        }
+
         if (!global.shopOpen) {
             return interaction.editReply({ content: '❌ المتجر مغلق حالياً' });
         }
